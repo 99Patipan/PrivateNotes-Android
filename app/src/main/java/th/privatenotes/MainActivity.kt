@@ -1,0 +1,135 @@
+package th.privatenotes
+
+import android.content.Context
+import android.content.ContextWrapper
+import android.os.Bundle
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.fragment.app.FragmentActivity
+import th.privatenotes.ui.ConfirmDialog
+import th.privatenotes.ui.EditorDialog
+import th.privatenotes.ui.ExportDialog
+import th.privatenotes.ui.ImportDialog
+import th.privatenotes.ui.LockScreen
+import th.privatenotes.ui.NotesScreen
+
+// BiometricPrompt requires a FragmentActivity (ComponentActivity is not enough).
+class MainActivity : FragmentActivity() {
+    private val vm: NotesViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        // Hide content in the recents screen and block screenshots / screen recording.
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
+        setContent { PrivateNotesApp(vm) }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        vm.onStarted()
+    }
+
+    override fun onStop() {
+        vm.onStopped(isChangingConfigurations)
+        super.onStop()
+    }
+}
+
+private tailrec fun Context.findActivity(): FragmentActivity? = when (this) {
+    is FragmentActivity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+@Composable
+private fun PrivateNotesApp(vm: NotesViewModel) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    val isDark = vm.dark ?: isSystemInDarkTheme()
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> vm.finishExport(uri, context.contentResolver) }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> vm.onImportPicked(uri, context.contentResolver) }
+
+    val toast = vm.toast
+    LaunchedEffect(toast) {
+        if (toast != null) {
+            Toast.makeText(context, toast, Toast.LENGTH_LONG).show()
+            vm.consumeToast()
+        }
+    }
+
+    MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            if (!vm.unlocked) {
+                LockScreen(
+                    setup = vm.setup,
+                    busy = vm.busy,
+                    message = vm.message,
+                    showBiometric = vm.biometricEnabled,
+                    onSubmit = vm::submitPin,
+                    onBiometric = { activity?.let { vm.unlockWithBiometric(it) } }
+                )
+            } else {
+                NotesScreen(
+                    vm = vm,
+                    isDark = isDark,
+                    onToggleTheme = { vm.dark = !isDark },
+                    onBackup = vm::openExportDialog,
+                    onRestore = {
+                        vm.beginImport()
+                        importLauncher.launch(arrayOf("*/*"))
+                    },
+                    onToggleBiometric = {
+                        if (vm.biometricEnabled) vm.disableBiometric()
+                        else activity?.let { vm.enableBiometric(it) }
+                    }
+                )
+                if (vm.editorOpen) EditorDialog(vm)
+                when (vm.backupDialog) {
+                    BackupDialog.Export -> ExportDialog(
+                        busy = vm.busy,
+                        unreadable = vm.unreadable,
+                        onStart = { pw, pw2 ->
+                            if (vm.beginExport(pw, pw2)) {
+                                exportLauncher.launch("private-notes-backup.snote")
+                            }
+                        },
+                        onDismiss = vm::dismissBackupDialog
+                    )
+                    BackupDialog.ImportPassword -> ImportDialog(
+                        busy = vm.busy,
+                        onSubmit = vm::decryptImport,
+                        onDismiss = vm::dismissBackupDialog
+                    )
+                    BackupDialog.None -> Unit
+                }
+                vm.confirm?.let { ConfirmDialog(vm, it) }
+            }
+        }
+    }
+}

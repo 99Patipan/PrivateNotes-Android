@@ -109,7 +109,7 @@ private fun PrivateNotesApp(vm: NotesViewModel) {
                         else activity?.let { vm.enableBiometric(it) }
                     }
                 )
-                if (vm.editorOpen) EditorDialog(vm)
+                if (vm.editorOpen) EditorDialog(vm, isDark)
                 when (vm.backupDialog) {
                     BackupDialog.Export -> ExportDialog(
                         busy = vm.busy,

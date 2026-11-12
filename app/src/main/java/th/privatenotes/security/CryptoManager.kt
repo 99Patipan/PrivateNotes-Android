@@ -63,7 +63,7 @@ class CryptoManager {
         try {
             val t = Gcm.decrypt(key, n.ivTitle, n.titleCipher, AAD_TITLE)
             val b = Gcm.decrypt(key, n.ivBody, n.bodyCipher, bodyAad(n.ivTitle))
-            return PlainNote(n.id, String(t, Charsets.UTF_8), String(b, Charsets.UTF_8), n.updatedAt)
+            return PlainNote(n.id, String(t, Charsets.UTF_8), String(b, Charsets.UTF_8), n.updatedAt, n.color)
         } finally {
             key.fill(0)
         }

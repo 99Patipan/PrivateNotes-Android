@@ -1,6 +1,12 @@
 package th.privatenotes.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,19 +14,36 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogProperties
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.GregorianCalendar
+import java.util.Locale
 import th.privatenotes.Confirm
 import th.privatenotes.NotesViewModel
+import th.privatenotes.SortMode
+import th.privatenotes.data.PlainNote
 import th.privatenotes.security.BiometricAuth
 
 // ===================== Lock screen =====================
@@ -117,6 +140,76 @@ private fun PasswordField(label: String, value: String, onChange: (String) -> Un
 
 // ===================== Notes list =====================
 
+@Composable
+private fun ColorDot(color: Color, size: Dp) {
+    Box(Modifier.size(size).clip(CircleShape).background(color))
+}
+
+/** 2x2 colour squares, like the filter icon in ColorNote. */
+@Composable
+private fun PaletteIcon() {
+    Canvas(Modifier.size(24.dp)) {
+        val gap = 2.dp.toPx()
+        val s = (size.width - gap) / 2f
+        val box = Size(s, s)
+        drawRect(Color(0xFF41B3D9), Offset(0f, 0f), box)
+        drawRect(Color(0xFFDCDC22), Offset(s + gap, 0f), box)
+        drawRect(Color(0xFF9A8FBF), Offset(0f, s + gap), box)
+        drawRect(Color(0xFFF0612B), Offset(s + gap, s + gap), box)
+    }
+}
+
+private fun formatDate(ts: Long): String {
+    val thisYear = GregorianCalendar().get(java.util.Calendar.YEAR)
+    val noteYear = GregorianCalendar().apply { timeInMillis = ts }.get(java.util.Calendar.YEAR)
+    val pattern = if (thisYear == noteYear) "d MMM" else "d MMM\nyyyy"
+    val fmt = SimpleDateFormat(pattern, Locale("th"))
+    fmt.calendar = GregorianCalendar() // Gregorian year (2025), not Buddhist era
+    return fmt.format(Date(ts))
+}
+
+@Composable
+private fun NoteCard(note: PlainNote, isDark: Boolean, onClick: () -> Unit) {
+    val c = noteColor(note.color)
+    val shape = RoundedCornerShape(10.dp)
+    val date = remember(note.updatedAt) { formatDate(note.updatedAt) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(c.background(isDark))
+            .clickable(onClick = onClick)
+            .height(IntrinsicSize.Min)
+    ) {
+        Box(Modifier.width(6.dp).fillMaxHeight().background(c.stripe))
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 16.dp)) {
+            Text(
+                note.title.ifBlank { "(ไม่มีชื่อ)" },
+                style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (note.body.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    note.body,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
+        Text(
+            date,
+            Modifier.padding(end = 14.dp).align(Alignment.CenterVertically),
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.End,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotesScreen(
@@ -129,22 +222,66 @@ fun NotesScreen(
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
-    val visible = remember(vm.notes, vm.search) {
-        vm.notes.filter {
-            it.title.contains(vm.search, ignoreCase = true) ||
-                it.body.contains(vm.search, ignoreCase = true)
+    var colorMenu by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
+
+    val visible = remember(vm.notes, vm.search, vm.sort, vm.colorFilter) {
+        val q = vm.search.trim()
+        val filtered = vm.notes.filter { n ->
+            (vm.colorFilter == null || n.color == vm.colorFilter) &&
+                (q.isEmpty() || n.title.contains(q, ignoreCase = true) ||
+                    n.body.contains(q, ignoreCase = true))
+        }
+        when (vm.sort) {
+            SortMode.Modified -> filtered.sortedByDescending { it.updatedAt }
+            SortMode.Color ->
+                filtered.sortedWith(compareBy<PlainNote>({ it.color }, { -it.updatedAt }))
+            SortMode.Title -> filtered.sortedBy { it.title.lowercase() }
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Private Notes (${vm.notes.size})") },
+                title = {
+                    Text(
+                        "Private Notes",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Light
+                    )
+                },
                 actions = {
-                    IconButton(onClick = onToggleTheme) {
+                    // Colour filter
+                    Box {
+                        IconButton(onClick = { colorMenu = true }) { PaletteIcon() }
+                        DropdownMenu(expanded = colorMenu, onDismissRequest = { colorMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("ทุกสี") },
+                                trailingIcon = {
+                                    if (vm.colorFilter == null) Icon(Icons.Default.Check, null)
+                                },
+                                onClick = { vm.colorFilter = null; colorMenu = false }
+                            )
+                            NoteColors.forEachIndexed { i, nc ->
+                                DropdownMenuItem(
+                                    text = { Text(nc.name) },
+                                    leadingIcon = { ColorDot(nc.stripe, 20.dp) },
+                                    trailingIcon = {
+                                        if (vm.colorFilter == i) Icon(Icons.Default.Check, null)
+                                    },
+                                    onClick = { vm.colorFilter = i; colorMenu = false }
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = {
+                        searchOpen = !searchOpen
+                        if (!searchOpen) vm.search = ""
+                    }) {
                         Icon(
-                            if (isDark) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            "สลับธีม"
+                            if (searchOpen) Icons.Default.Close else Icons.Default.Search,
+                            "ค้นหา"
                         )
                     }
                     IconButton(onClick = { vm.lockNow() }) { Icon(Icons.Default.Lock, "ล็อก") }
@@ -153,6 +290,16 @@ fun NotesScreen(
                             Icon(Icons.Default.MoreVert, "เมนู")
                         }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (isDark) "โหมดสว่าง" else "โหมดมืด") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (isDark) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                        null
+                                    )
+                                },
+                                onClick = { menu = false; onToggleTheme() }
+                            )
                             DropdownMenuItem(
                                 text = { Text("สำรองข้อมูล") },
                                 leadingIcon = { Icon(Icons.Default.Save, null) },
@@ -181,21 +328,70 @@ fun NotesScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { vm.openEditor(null) }) {
-                Icon(Icons.Default.Add, "เพิ่มบันทึก")
-            }
+            FloatingActionButton(
+                onClick = { vm.openEditor(null) },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = Color(0xFF009688),
+                contentColor = Color.White
+            ) { Icon(Icons.Default.Add, "เพิ่มบันทึก") }
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)) {
             if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            OutlinedTextField(
-                value = vm.search,
-                onValueChange = { vm.search = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text("ค้นหา") },
-                leadingIcon = { Icon(Icons.Default.Search, null) }
-            )
+
+            if (searchOpen) {
+                OutlinedTextField(
+                    value = vm.search,
+                    onValueChange = { vm.search = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(28.dp),
+                    placeholder = { Text("ค้นหา") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) }
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Sort bar
+            Box(Modifier.fillMaxWidth()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(44.dp).clickable { sortMenu = true }
+                ) {
+                    Row(
+                        Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(vm.sort.label, style = MaterialTheme.typography.titleSmall)
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                }
+                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                    SortMode.values().forEach { m ->
+                        DropdownMenuItem(
+                            text = { Text(m.label) },
+                            trailingIcon = { if (m == vm.sort) Icon(Icons.Default.Check, null) },
+                            onClick = { vm.sort = m; sortMenu = false }
+                        )
+                    }
+                }
+            }
+
+            vm.colorFilter?.let { idx ->
+                Spacer(Modifier.height(6.dp))
+                FilterChip(
+                    selected = true,
+                    onClick = { vm.colorFilter = null },
+                    label = { Text("สี${noteColor(idx).name}") },
+                    leadingIcon = { ColorDot(noteColor(idx).stripe, 14.dp) },
+                    trailingIcon = {
+                        Icon(Icons.Default.Close, "ล้างตัวกรอง", Modifier.size(16.dp))
+                    }
+                )
+            }
+
             if (vm.unreadable > 0) {
                 Spacer(Modifier.height(8.dp))
                 Card(
@@ -213,31 +409,13 @@ fun NotesScreen(
             }
             Spacer(Modifier.height(8.dp))
             if (vm.notes.isEmpty()) {
-                Text("ยังไม่มีบันทึก กดปุ่ม + เพื่อเพิ่ม")
+                Text("ยังไม่มีบันทึก กดปุ่ม + เพื่อเพิ่ม", Modifier.padding(8.dp))
             } else if (visible.isEmpty()) {
-                Text("ไม่พบบันทึกที่ตรงกับคำค้น")
+                Text("ไม่พบบันทึกที่ตรงกับตัวกรอง", Modifier.padding(8.dp))
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(visible, key = { it.id }) { note ->
-                    ElevatedCard(Modifier.fillMaxWidth().clickable { vm.openEditor(note) }) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                note.title.ifBlank { "(ไม่มีชื่อ)" },
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (note.body.isNotBlank()) {
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    note.body,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
-                    }
+                    NoteCard(note, isDark) { vm.openEditor(note) }
                 }
                 item { Spacer(Modifier.height(88.dp)) }
             }
@@ -248,42 +426,96 @@ fun NotesScreen(
 // ===================== Dialogs =====================
 
 @Composable
-fun EditorDialog(vm: NotesViewModel) {
-    AlertDialog(
+private fun ColorSwatch(c: NoteColor, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(c.stripe)
+            .then(
+                if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                else Modifier
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) {
+            Icon(Icons.Default.Check, c.name, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun transparentFieldColors() = TextFieldDefaults.colors(
+    focusedContainerColor = Color.Transparent,
+    unfocusedContainerColor = Color.Transparent,
+    disabledContainerColor = Color.Transparent,
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent
+)
+
+/** Full-screen editor tinted with the note's colour; the colour can be changed at any time. */
+@Composable
+fun EditorDialog(vm: NotesViewModel, isDark: Boolean) {
+    val c = noteColor(vm.draftColor)
+    Dialog(
         onDismissRequest = vm::requestCloseEditor,
-        properties = DialogProperties(dismissOnClickOutside = false),
-        title = { Text(if (vm.editingId == null) "บันทึกใหม่" else "แก้ไขบันทึก") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = vm.draftTitle,
-                    onValueChange = { vm.draftTitle = it },
-                    label = { Text("หัวข้อ") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = vm.draftBody,
-                    onValueChange = { vm.draftBody = it },
-                    label = { Text("เนื้อหา") },
-                    minLines = 6,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = { TextButton(onClick = vm::saveDraft) { Text("บันทึก") } },
-        dismissButton = {
-            Row {
-                if (vm.editingId != null) {
-                    TextButton(onClick = vm::requestDelete) {
-                        Text("ลบ", color = MaterialTheme.colorScheme.error)
+        properties = DialogProperties(
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            securePolicy = SecureFlagPolicy.SecureOn // no screenshots of note text
+        )
+    ) {
+        Surface(Modifier.fillMaxSize(), color = c.background(isDark)) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = vm::requestCloseEditor) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "กลับ")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (vm.editingId != null) {
+                        IconButton(onClick = vm::requestDelete) {
+                            Icon(
+                                Icons.Default.Delete, "ลบ",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    IconButton(onClick = vm::saveDraft) { Icon(Icons.Default.Check, "บันทึก") }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    NoteColors.forEachIndexed { i, nc ->
+                        ColorSwatch(nc, selected = i == vm.draftColor) { vm.draftColor = i }
                     }
                 }
-                TextButton(onClick = vm::requestCloseEditor) { Text("ยกเลิก") }
+                TextField(
+                    value = vm.draftTitle,
+                    onValueChange = { vm.draftTitle = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.titleLarge,
+                    placeholder = { Text("หัวข้อ", style = MaterialTheme.typography.titleLarge) },
+                    colors = transparentFieldColors()
+                )
+                TextField(
+                    value = vm.draftBody,
+                    onValueChange = { vm.draftBody = it },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    placeholder = { Text("เนื้อหา") },
+                    colors = transparentFieldColors()
+                )
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -297,6 +529,7 @@ fun ExportDialog(
     var pw2 by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("สำรองข้อมูล") },
         text = {
             Column {
@@ -331,6 +564,7 @@ fun ImportDialog(busy: Boolean, onSubmit: (String) -> Unit, onDismiss: () -> Uni
     var pw by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("กู้คืนข้อมูล") },
         text = {
             Column {

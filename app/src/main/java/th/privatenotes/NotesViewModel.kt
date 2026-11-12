@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import th.privatenotes.data.NOTE_COLOR_COUNT
 import th.privatenotes.data.Note
 import th.privatenotes.data.NotesDatabase
 import th.privatenotes.data.PlainNote
@@ -32,6 +33,12 @@ import java.io.InputStream
 
 enum class Confirm { DeleteNote, DiscardDraft, Restore }
 enum class BackupDialog { None, Export, ImportPassword }
+
+enum class SortMode(val label: String) {
+    Modified("เรียงตามเวลาที่แก้ไข"),
+    Color("เรียงตามสี"),
+    Title("เรียงตามชื่อ")
+}
 
 class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private val db = NotesDatabase.get(app)
@@ -60,6 +67,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var search by mutableStateOf("")
     var dark by mutableStateOf<Boolean?>(null)
+    var sort by mutableStateOf(SortMode.Modified)
+    var colorFilter by mutableStateOf<Int?>(null)
 
     // ---- editor (kept in memory here so rotation does not lose the draft) ----
     var editorOpen by mutableStateOf(false)
@@ -68,9 +77,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var draftTitle by mutableStateOf("")
     var draftBody by mutableStateOf("")
+    var draftColor by mutableStateOf(0)
     private var baseTitle = ""
     private var baseBody = ""
-    private val isDirty: Boolean get() = draftTitle != baseTitle || draftBody != baseBody
+    private var baseColor = 0
+    private val isDirty: Boolean
+        get() = draftTitle != baseTitle || draftBody != baseBody || draftColor != baseColor
 
     // ---- dialogs / backup ----
     var confirm by mutableStateOf<Confirm?>(null)
@@ -168,12 +180,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         notes = emptyList()
         unreadable = 0
         search = ""
+        colorFilter = null
         editorOpen = false
         editingId = null
         draftTitle = ""
         draftBody = ""
+        draftColor = 0
         baseTitle = ""
         baseBody = ""
+        baseColor = 0
         confirm = null
         backupDialog = BackupDialog.None
         pendingImport = null
@@ -280,8 +295,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         editingId = note?.id
         baseTitle = note?.title ?: ""
         baseBody = note?.body ?: ""
+        baseColor = note?.color ?: (colorFilter ?: 0)
         draftTitle = baseTitle
         draftBody = baseBody
+        draftColor = baseColor
         editorOpen = true
     }
 
@@ -294,8 +311,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         editingId = null
         draftTitle = ""
         draftBody = ""
+        draftColor = 0
         baseTitle = ""
         baseBody = ""
+        baseColor = 0
     }
 
     fun requestDelete() {
@@ -305,6 +324,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun saveDraft() {
         val title = draftTitle
         val body = draftBody
+        val color = draftColor
         val id = editingId
         if (id == null && title.isBlank() && body.isBlank()) { closeEditor(); return }
         viewModelScope.launch {
@@ -317,14 +337,16 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                         dao.insert(
                             Note(
                                 titleCipher = s.titleCipher, bodyCipher = s.bodyCipher,
-                                ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = now
+                                ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = now,
+                                color = color
                             )
                         )
                     } else {
                         dao.update(
                             existing.copy(
                                 titleCipher = s.titleCipher, bodyCipher = s.bodyCipher,
-                                ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = now
+                                ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = now,
+                                color = color
                             )
                         )
                     }
@@ -407,6 +429,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                                 .put("title", it.title)
                                 .put("body", it.body)
                                 .put("updatedAt", it.updatedAt)
+                                .put("color", it.color)
                         )
                     }
                     val plain = arr.toString().toByteArray(Charsets.UTF_8)
@@ -470,7 +493,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                                 0,
                                 o.optString("title"),
                                 o.optString("body"),
-                                o.optLong("updatedAt", System.currentTimeMillis())
+                                o.optLong("updatedAt", System.currentTimeMillis()),
+                                o.optInt("color", 0).coerceIn(0, NOTE_COLOR_COUNT - 1)
                             )
                         }
                     } finally {
@@ -502,7 +526,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                         val s = crypto.sealNote(n.title, n.body)
                         Note(
                             titleCipher = s.titleCipher, bodyCipher = s.bodyCipher,
-                            ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = n.updatedAt
+                            ivTitle = s.ivTitle, ivBody = s.ivBody, updatedAt = n.updatedAt,
+                            color = n.color
                         )
                     }
                     db.withTransaction {

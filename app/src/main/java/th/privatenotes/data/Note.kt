@@ -1,5 +1,6 @@
 package th.privatenotes.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -10,5 +11,7 @@ data class Note(
     val bodyCipher: ByteArray,
     val ivTitle: ByteArray,
     val ivBody: ByteArray,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Index into the UI colour palette. Not secret, so stored unencrypted. */
+    @ColumnInfo(defaultValue = "0") val color: Int = 0
 )

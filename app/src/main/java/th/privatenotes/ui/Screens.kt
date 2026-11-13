@@ -4,7 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
@@ -458,6 +457,7 @@ private fun transparentFieldColors() = TextFieldDefaults.colors(
 @Composable
 fun EditorDialog(vm: NotesViewModel, isDark: Boolean) {
     val c = noteColor(vm.draftColor)
+    var colorMenu by remember { mutableStateOf(false) }
     Dialog(
         onDismissRequest = vm::requestCloseEditor,
         properties = DialogProperties(
@@ -485,18 +485,41 @@ fun EditorDialog(vm: NotesViewModel, isDark: Boolean) {
                             )
                         }
                     }
-                    IconButton(onClick = vm::saveDraft) { Icon(Icons.Default.Check, "บันทึก") }
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    NoteColors.forEachIndexed { i, nc ->
-                        ColorSwatch(nc, selected = i == vm.draftColor) { vm.draftColor = i }
+                    // Colour picker lives in a menu instead of taking space at the top of the note.
+                    Box {
+                        IconButton(onClick = { colorMenu = true }) {
+                            Box(
+                                Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(c.stripe)
+                                    .border(
+                                        2.dp,
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                                        CircleShape
+                                    )
+                            )
+                        }
+                        DropdownMenu(expanded = colorMenu, onDismissRequest = { colorMenu = false }) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                Text("สีของโน้ต", style = MaterialTheme.typography.labelLarge)
+                                Spacer(Modifier.height(10.dp))
+                                NoteColors.chunked(4).forEachIndexed { row, group ->
+                                    if (row > 0) Spacer(Modifier.height(10.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        group.forEachIndexed { col, nc ->
+                                            val index = row * 4 + col
+                                            ColorSwatch(nc, selected = index == vm.draftColor) {
+                                                vm.draftColor = index
+                                                colorMenu = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                    IconButton(onClick = vm::saveDraft) { Icon(Icons.Default.Check, "บันทึก") }
                 }
                 TextField(
                     value = vm.draftTitle,

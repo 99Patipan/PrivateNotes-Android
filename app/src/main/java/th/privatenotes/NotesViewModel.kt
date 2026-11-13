@@ -57,6 +57,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var biometricEnabled by mutableStateOf(lock.isBiometricEnabled())
         private set
+    /** Wall-clock time (ms) when the PIN lockout ends; 0 when not locked out. */
+    var lockoutEndsAt by mutableStateOf(
+        lock.remainingLockoutMs().let { if (it > 0) System.currentTimeMillis() + it else 0L }
+    )
+        private set
     var toast by mutableStateOf<String?>(null)
         private set
 
@@ -126,10 +131,18 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                         is PinResult.Success -> {
                             crypto.setDataKey(r.dek)
                             r.dek.fill(0)
+                            lockoutEndsAt = 0L
                             onUnlocked()
                         }
-                        PinResult.Wrong -> message = wrongMessage()
-                        is PinResult.Locked -> message = lockedMessage(r.remainingMs)
+                        PinResult.Wrong -> {
+                            message = wrongMessage()
+                            val ms = lock.remainingLockoutMs()
+                            lockoutEndsAt = if (ms > 0) System.currentTimeMillis() + ms else 0L
+                        }
+                        is PinResult.Locked -> {
+                            message = lockedMessage(r.remainingMs)
+                            lockoutEndsAt = System.currentTimeMillis() + r.remainingMs
+                        }
                     }
                 }
             } catch (e: IllegalArgumentException) {
@@ -142,6 +155,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    fun clearMessage() { message = "" }
 
     private fun wrongMessage(): String {
         val ms = lock.remainingLockoutMs()

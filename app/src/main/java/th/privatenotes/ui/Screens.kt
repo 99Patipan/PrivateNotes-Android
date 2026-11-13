@@ -1,5 +1,9 @@
 package th.privatenotes.ui
 
+import android.app.Activity
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -31,6 +37,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.IntOffset
+import androidx.core.view.WindowCompat
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import th.privatenotes.R
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,80 +60,253 @@ import th.privatenotes.security.BiometricAuth
 
 // ===================== Lock screen =====================
 
+private val LockTop = Color(0xFF16352F)
+private val LockBottom = Color(0xFF0C2A25)
+private val Gold = Color(0xFFF7B733)
+private val ErrorSoft = Color(0xFFFF8A80)
+private val KeySize = 68.dp
+
 @Composable
 fun LockScreen(
     setup: Boolean,
     busy: Boolean,
     message: String,
+    lockoutEndsAt: Long,
     showBiometric: Boolean,
     onSubmit: (pin: String, confirm: String) -> Unit,
-    onBiometric: () -> Unit
+    onBiometric: () -> Unit,
+    onClearMessage: () -> Unit
 ) {
     var pin by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
-    val canSubmit = !busy && pin.length >= 6 && (!setup || confirm.length >= 6)
+    var stage by remember { mutableStateOf(0) } // setup only: 0 = choose PIN, 1 = confirm PIN
+    val confirming = setup && stage == 1
+    val current = if (confirming) confirm else pin
 
-    Column(
-        Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    // ---- lockout countdown ----
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lockoutEndsAt) {
+        while (System.currentTimeMillis() < lockoutEndsAt) {
+            now = System.currentTimeMillis()
+            delay(250)
+        }
+        now = System.currentTimeMillis()
+        if (lockoutEndsAt != 0L) onClearMessage()
+    }
+    val remainingSec = ((lockoutEndsAt - now + 999) / 1000).coerceAtLeast(0)
+    val lockedOut = remainingSec > 0
+    val shownMessage =
+        if (lockedOut) "ลองผิดหลายครั้งเกินไป ลองใหม่ได้ใน %d:%02d".format(remainingSec / 60, remainingSec % 60)
+        else message
+    val isError = shownMessage.isNotEmpty() && current.isEmpty()
+    val canType = !busy && !lockedOut
+    val canSubmit = canType && current.length >= 6
+
+    // ---- shake the dots when a new error arrives ----
+    val shake = remember { Animatable(0f) }
+    LaunchedEffect(message) {
+        if (message.isNotEmpty()) {
+            repeat(3) {
+                shake.animateTo(14f, tween(45))
+                shake.animateTo(-14f, tween(45))
+            }
+            shake.animateTo(0f, tween(45))
+        }
+    }
+
+    // Offer the fingerprint prompt right away when the lock screen appears.
+    LaunchedEffect(Unit) { if (showBiometric && !setup) onBiometric() }
+
+    // The lock screen is always dark green, so force light status/navigation bar icons.
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val window = (view.context as? Activity)?.window
+        if (window == null) {
+            onDispose { }
+        } else {
+            val ctrl = WindowCompat.getInsetsController(window, view)
+            val prevStatus = ctrl.isAppearanceLightStatusBars
+            val prevNav = ctrl.isAppearanceLightNavigationBars
+            ctrl.isAppearanceLightStatusBars = false
+            ctrl.isAppearanceLightNavigationBars = false
+            onDispose {
+                ctrl.isAppearanceLightStatusBars = prevStatus
+                ctrl.isAppearanceLightNavigationBars = prevNav
+            }
+        }
+    }
+
+    val title = when {
+        !setup -> "ปลดล็อก Private Notes"
+        confirming -> "ยืนยัน PIN อีกครั้ง"
+        else -> "ตั้ง PIN ของคุณ"
+    }
+    val subtitle = when {
+        !setup -> "ใส่ PIN เพื่อเปิดบันทึก"
+        confirming -> "พิมพ์ PIN เดิมอีกครั้งให้ตรงกัน"
+        else -> "ตัวเลข 6–12 หลัก หากลืมจะกู้ได้จากไฟล์สำรองเท่านั้น"
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(LockTop, LockBottom)))
+            .systemBarsPadding(),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(Icons.Default.Lock, null, Modifier.size(48.dp))
-        Spacer(Modifier.height(12.dp))
-        Text(
-            if (setup) "ตั้ง PIN สำหรับปกป้องบันทึก" else "ปลดล็อก Private Notes",
-            style = MaterialTheme.typography.titleLarge
-        )
-        if (setup) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Image(painterResource(R.drawable.lock_logo), null, Modifier.size(72.dp))
+            Spacer(Modifier.height(12.dp))
+            Text(title, color = Color.White, style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
             Text(
-                "ตัวเลข 6–12 หลัก หากลืม PIN จะกู้บันทึกได้จากไฟล์สำรองเท่านั้น",
-                style = MaterialTheme.typography.bodySmall
+                subtitle,
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center
             )
-        }
-        Spacer(Modifier.height(16.dp))
-        PinField("PIN", pin) { pin = it }
-        if (setup) {
-            Spacer(Modifier.height(8.dp))
-            PinField("ยืนยัน PIN", confirm) { confirm = it }
-        }
-        if (message.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Text(message, color = MaterialTheme.colorScheme.error)
-        }
-        Spacer(Modifier.height(16.dp))
-        Button(
-            enabled = canSubmit,
-            onClick = {
-                onSubmit(pin, confirm)
-                pin = ""
-                confirm = ""
+            Spacer(Modifier.height(22.dp))
+
+            // PIN dots (always at least 6, grows up to 12)
+            Row(
+                Modifier.offset { IntOffset(shake.value.roundToInt(), 0) },
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                repeat(maxOf(6, current.length)) { i ->
+                    val filled = i < current.length
+                    val tint = if (isError) ErrorSoft else Gold
+                    Box(
+                        Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(if (filled) tint else Color.Transparent)
+                            .border(1.5.dp, if (filled) tint else Color.White.copy(alpha = 0.4f), CircleShape)
+                    )
+                }
             }
-        ) { Text(if (setup) "ตั้ง PIN" else "ปลดล็อก") }
-        if (busy) {
-            Spacer(Modifier.height(12.dp))
-            CircularProgressIndicator()
-        }
-        if (showBiometric && !setup) {
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onBiometric, enabled = !busy) {
-                Icon(Icons.Default.Fingerprint, null)
-                Spacer(Modifier.width(8.dp))
-                Text("ใช้ลายนิ้วมือ")
+            Spacer(Modifier.height(10.dp))
+            Box(Modifier.height(36.dp), contentAlignment = Alignment.Center) {
+                if (busy) {
+                    CircularProgressIndicator(Modifier.size(22.dp), color = Gold, strokeWidth = 2.dp)
+                } else if (shownMessage.isNotEmpty()) {
+                    Text(
+                        shownMessage,
+                        color = ErrorSoft,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+
+            Keypad(
+                digitsEnabled = canType,
+                biometricEnabled = !busy,
+                showBiometric = showBiometric && !setup,
+                onDigit = { d ->
+                    if (current.length < 12) {
+                        if (confirming) confirm += d else pin += d
+                    }
+                },
+                onBackspace = {
+                    if (confirming) confirm = confirm.dropLast(1) else pin = pin.dropLast(1)
+                },
+                onBiometric = onBiometric
+            )
+            Spacer(Modifier.height(18.dp))
+
+            Button(
+                enabled = canSubmit,
+                onClick = {
+                    when {
+                        setup && stage == 0 -> stage = 1
+                        setup -> {
+                            onSubmit(pin, confirm)
+                            pin = ""
+                            confirm = ""
+                            stage = 0
+                        }
+                        else -> {
+                            onSubmit(pin, "")
+                            pin = ""
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Gold,
+                    contentColor = LockTop,
+                    disabledContainerColor = Color.White.copy(alpha = 0.12f),
+                    disabledContentColor = Color.White.copy(alpha = 0.4f)
+                ),
+                modifier = Modifier.fillMaxWidth().widthIn(max = 280.dp).height(48.dp)
+            ) {
+                Text(
+                    when {
+                        !setup -> "ปลดล็อก"
+                        confirming -> "ตั้ง PIN"
+                        else -> "ถัดไป"
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
         }
     }
 }
 
 @Composable
-private fun PinField(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { if (it.length <= 12 && it.all { c -> c.isDigit() }) onChange(it) },
-        label = { Text(label) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+private fun Keypad(
+    digitsEnabled: Boolean,
+    biometricEnabled: Boolean,
+    showBiometric: Boolean,
+    onDigit: (Char) -> Unit,
+    onBackspace: () -> Unit,
+    onBiometric: () -> Unit
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        listOf("123", "456", "789").forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                row.forEach { ch -> DigitKey(ch, digitsEnabled) { onDigit(ch) } }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            if (showBiometric) {
+                KeyButton(biometricEnabled, onBiometric) {
+                    Icon(Icons.Default.Fingerprint, "ลายนิ้วมือ", tint = Gold)
+                }
+            } else {
+                Spacer(Modifier.size(KeySize))
+            }
+            DigitKey('0', digitsEnabled) { onDigit('0') }
+            KeyButton(digitsEnabled, onBackspace) {
+                Icon(Icons.AutoMirrored.Filled.Backspace, "ลบ", tint = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DigitKey(ch: Char, enabled: Boolean, onClick: () -> Unit) {
+    KeyButton(enabled, onClick) {
+        Text(ch.toString(), color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Light)
+    }
+}
+
+@Composable
+private fun KeyButton(enabled: Boolean, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+    Box(
+        Modifier
+            .size(KeySize)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = if (enabled) 0.10f else 0.05f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+        content = content
     )
 }
 

@@ -90,9 +90,11 @@ private fun PrivateNotesApp(vm: NotesViewModel) {
                     setup = vm.setup,
                     busy = vm.busy,
                     message = vm.message,
+                    lockoutEndsAt = vm.lockoutEndsAt,
                     showBiometric = vm.biometricEnabled,
                     onSubmit = vm::submitPin,
-                    onBiometric = { activity?.let { vm.unlockWithBiometric(it) } }
+                    onBiometric = { activity?.let { vm.unlockWithBiometric(it) } },
+                    onClearMessage = vm::clearMessage
                 )
             } else {
                 NotesScreen(

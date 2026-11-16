@@ -1,8 +1,8 @@
 package th.privatenotes.ui
 
-import android.app.Activity
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -25,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -37,10 +38,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
-import androidx.core.view.WindowCompat
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import th.privatenotes.R
@@ -116,25 +115,6 @@ fun LockScreen(
 
     // Offer the fingerprint prompt right away when the lock screen appears.
     LaunchedEffect(Unit) { if (showBiometric && !setup) onBiometric() }
-
-    // The lock screen is always dark green, so force light status/navigation bar icons.
-    val view = LocalView.current
-    DisposableEffect(Unit) {
-        val window = (view.context as? Activity)?.window
-        if (window == null) {
-            onDispose { }
-        } else {
-            val ctrl = WindowCompat.getInsetsController(window, view)
-            val prevStatus = ctrl.isAppearanceLightStatusBars
-            val prevNav = ctrl.isAppearanceLightNavigationBars
-            ctrl.isAppearanceLightStatusBars = false
-            ctrl.isAppearanceLightNavigationBars = false
-            onDispose {
-                ctrl.isAppearanceLightStatusBars = prevStatus
-                ctrl.isAppearanceLightNavigationBars = prevNav
-            }
-        }
-    }
 
     val title = when {
         !setup -> "ปลดล็อก Private Notes"
@@ -361,6 +341,7 @@ private fun NoteCard(note: PlainNote, isDark: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
+            .shadow(1.dp, shape)
             .clip(shape)
             .background(c.background(isDark))
             .clickable(onClick = onClick)
@@ -427,15 +408,31 @@ fun NotesScreen(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Private Notes",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Light
-                    )
+                    Column {
+                        Text(
+                            "Private Notes",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontSize = 26.sp),
+                            fontWeight = FontWeight.Light,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "${vm.notes.size} บันทึก • เข้ารหัสในเครื่อง",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent,
+                    titleContentColor = MaterialTheme.colorScheme.primary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                ),
                 actions = {
                     // Colour filter
                     Box {
@@ -516,9 +513,9 @@ fun NotesScreen(
             FloatingActionButton(
                 onClick = { vm.openEditor(null) },
                 shape = RoundedCornerShape(20.dp),
-                containerColor = Color(0xFF009688),
-                contentColor = Color.White
-            ) { Icon(Icons.Default.Add, "เพิ่มบันทึก") }
+                containerColor = Color(0xFFF7B733),
+                contentColor = Color(0xFF16352F)
+            ) { Icon(Icons.Default.Add, "เพิ่มบันทึก", Modifier.size(28.dp)) }
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)) {
@@ -540,9 +537,14 @@ fun NotesScreen(
             // Sort bar
             Box(Modifier.fillMaxWidth()) {
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth().height(44.dp).clickable { sortMenu = true }
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .clickable { sortMenu = true }
                 ) {
                     Row(
                         Modifier.fillMaxSize(),
@@ -594,15 +596,30 @@ fun NotesScreen(
             }
             Spacer(Modifier.height(8.dp))
             if (vm.notes.isEmpty()) {
-                Text("ยังไม่มีบันทึก กดปุ่ม + เพื่อเพิ่ม", Modifier.padding(8.dp))
-            } else if (visible.isEmpty()) {
-                Text("ไม่พบบันทึกที่ตรงกับตัวกรอง", Modifier.padding(8.dp))
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(visible, key = { it.id }) { note ->
-                    NoteCard(note, isDark) { vm.openEditor(note) }
+                Column(
+                    Modifier.fillMaxWidth().padding(top = 56.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Image(painterResource(R.drawable.lock_logo), null, Modifier.size(112.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("ยังไม่มีบันทึก", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "กดปุ่ม + เพื่อจดโน้ตแรกของคุณ",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                item { Spacer(Modifier.height(88.dp)) }
+            } else {
+                if (visible.isEmpty()) {
+                    Text("ไม่พบบันทึกที่ตรงกับตัวกรอง", Modifier.padding(8.dp))
+                }
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(visible, key = { it.id }) { note ->
+                        NoteCard(note, isDark) { vm.openEditor(note) }
+                    }
+                    item { Spacer(Modifier.height(88.dp)) }
+                }
             }
         }
     }

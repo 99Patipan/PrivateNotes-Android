@@ -10,15 +10,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
@@ -28,6 +32,8 @@ import th.privatenotes.ui.ExportDialog
 import th.privatenotes.ui.ImportDialog
 import th.privatenotes.ui.LockScreen
 import th.privatenotes.ui.NotesScreen
+import th.privatenotes.ui.appBackgroundColors
+import th.privatenotes.ui.appColorScheme
 
 // BiometricPrompt requires a FragmentActivity (ComponentActivity is not enough).
 class MainActivity : FragmentActivity() {
@@ -83,8 +89,26 @@ private fun PrivateNotesApp(vm: NotesViewModel) {
         }
     }
 
-    MaterialTheme(colorScheme = if (isDark) darkColorScheme() else lightColorScheme()) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    // Status/navigation bar icons: light on the dark lock screen and dark theme, dark otherwise.
+    val view = LocalView.current
+    val lightBars = vm.unlocked && !isDark
+    SideEffect {
+        activity?.window?.let { w ->
+            WindowCompat.getInsetsController(w, view).apply {
+                isAppearanceLightStatusBars = lightBars
+                isAppearanceLightNavigationBars = lightBars
+            }
+        }
+    }
+
+    MaterialTheme(colorScheme = appColorScheme(isDark)) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(appBackgroundColors(isDark))),
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground
+        ) {
             if (!vm.unlocked) {
                 LockScreen(
                     setup = vm.setup,

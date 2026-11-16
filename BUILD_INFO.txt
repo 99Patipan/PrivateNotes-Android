@@ -1,4 +1,4 @@
-Private Notes 1.4.0 (DB schema v2: note colour)
+Private Notes 1.5.0 (DB schema v2: note colour)
 - AGP 8.7.3 / Kotlin 2.0.21 / compileSdk 35 / minSdk 26
 - Gradle 8.9+ required. No wrapper is bundled: GitHub Actions installs Gradle 8.9
   (.github/workflows/android.yml). Locally run `gradle wrapper --gradle-version 8.9`

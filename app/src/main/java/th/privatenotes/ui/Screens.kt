@@ -1,7 +1,5 @@
 package th.privatenotes.ui
 
-import android.os.Build
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -117,10 +115,7 @@ fun LockScreen(
     val shake = remember { Animatable(0f) }
     LaunchedEffect(message) {
         if (message.isNotEmpty()) {
-            view.performHapticFeedback(
-                if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT
-                else HapticFeedbackConstants.LONG_PRESS
-            )
+            Haptics.error(view)
             repeat(3) {
                 shake.animateTo(14f, tween(45))
                 shake.animateTo(-14f, tween(45))
@@ -326,7 +321,7 @@ private fun KeyButton(enabled: Boolean, onClick: () -> Unit, content: @Composabl
         label = "keyBg"
     )
     LaunchedEffect(pressed) {
-        if (pressed) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (pressed) Haptics.tap(view)
     }
     Box(
         Modifier

@@ -749,6 +749,7 @@ fun ExportDialog(
     busy: Boolean,
     unreadable: Int,
     onStart: (String, String) -> Unit,
+    onShare: (String, String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var pw by remember { mutableStateOf("") }
@@ -758,7 +759,7 @@ fun ExportDialog(
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("สำรองข้อมูล") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "ตั้งรหัสผ่านอย่างน้อย 10 ตัวอักษร ไฟล์จะถูกเข้ารหัส " +
                         "หากลืมรหัสผ่านจะกู้คืนไม่ได้",
@@ -776,10 +777,20 @@ fun ExportDialog(
                 PasswordField("รหัสผ่านสำรอง", pw) { pw = it }
                 Spacer(Modifier.height(8.dp))
                 PasswordField("ยืนยันรหัสผ่าน", pw2) { pw2 = it }
+                Spacer(Modifier.height(16.dp))
+                FilledTonalButton(
+                    enabled = !busy,
+                    onClick = { onShare(pw, pw2) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Share, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("ส่งไป Google Drive / แชร์")
+                }
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy, onClick = { onStart(pw, pw2) }) { Text("เลือกที่บันทึก") }
+            TextButton(enabled = !busy, onClick = { onStart(pw, pw2) }) { Text("บันทึกลงไฟล์") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("ยกเลิก") } }
     )

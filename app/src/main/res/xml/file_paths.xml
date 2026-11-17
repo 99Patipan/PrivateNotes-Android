@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Encrypted backups written here only so another app (e.g. Google Drive) can read them. -->
+    <cache-path name="backups" path="backups/" />
+</paths>

@@ -8,6 +8,7 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,7 +30,11 @@ import th.privatenotes.security.KeystoreVault
 import th.privatenotes.security.LockManager
 import th.privatenotes.security.PinResult
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class Confirm { DeleteNote, DiscardDraft, Restore }
 enum class BackupDialog { None, Export, ImportPassword }
@@ -410,8 +415,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         pendingImport = null
     }
 
-    /** Validates the passwords; returns true if the file picker may be launched. */
-    fun beginExport(password: String, confirmPassword: String): Boolean {
+    private fun checkBackupPassword(password: String, confirmPassword: String): Boolean {
         if (password.length < BackupCrypto.MIN_PASSWORD) {
             toast = "รหัสผ่านสำรองต้องมีอย่างน้อย ${BackupCrypto.MIN_PASSWORD} ตัวอักษร"
             return false
@@ -420,9 +424,73 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             toast = "รหัสผ่านสองช่องไม่ตรงกัน"
             return false
         }
+        return true
+    }
+
+    /** Timestamped so repeated backups never overwrite each other (e.g. in Google Drive). */
+    fun backupFileName(): String =
+        "private-notes-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".snote"
+
+    /** Validates the passwords; returns true if the file picker may be launched. */
+    fun beginExport(password: String, confirmPassword: String): Boolean {
+        if (!checkBackupPassword(password, confirmPassword)) return false
         exportPassword = password.toCharArray()
         holdLock = true
         return true
+    }
+
+    /**
+     * Encrypts a backup into the app cache and hands a content:// URI to [onReady], which
+     * should open the system share sheet (Google Drive, email, ...). The file is encrypted
+     * exactly like a normal backup, so it is safe to hand to another app.
+     */
+    fun shareBackup(password: String, confirmPassword: String, onReady: (Uri, String) -> Unit) {
+        if (busy || !checkBackupPassword(password, confirmPassword)) return
+        val pw = password.toCharArray()
+        val snapshot = notes
+        val app = getApplication<Application>()
+        busy = true
+        viewModelScope.launch {
+            try {
+                val name = backupFileName()
+                val uri = withContext(Dispatchers.IO) {
+                    val dir = File(app.cacheDir, "backups").apply { mkdirs() }
+                    dir.listFiles()?.forEach { it.delete() }
+                    val file = File(dir, name)
+                    file.writeBytes(buildBackupBytes(snapshot, pw))
+                    FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
+                }
+                holdLock = true // the share sheet / Drive moves us to the background
+                backupDialog = BackupDialog.None
+                onReady(uri, name)
+            } catch (e: Exception) {
+                toast = e.message ?: "สร้างไฟล์สำรองไม่สำเร็จ"
+            } finally {
+                pw.fill('\u0000')
+                busy = false
+            }
+        }
+    }
+
+    fun onShareFinished() { holdLock = false }
+
+    private fun buildBackupBytes(snapshot: List<PlainNote>, pw: CharArray): ByteArray {
+        val arr = JSONArray()
+        snapshot.forEach {
+            arr.put(
+                JSONObject()
+                    .put("title", it.title)
+                    .put("body", it.body)
+                    .put("updatedAt", it.updatedAt)
+                    .put("color", it.color)
+            )
+        }
+        val plain = arr.toString().toByteArray(Charsets.UTF_8)
+        try {
+            return BackupCrypto.encrypt(plain, pw)
+        } finally {
+            plain.fill(0)
+        }
     }
 
     fun finishExport(uri: Uri?, resolver: ContentResolver) {
@@ -437,24 +505,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    val arr = JSONArray()
-                    snapshot.forEach {
-                        arr.put(
-                            JSONObject()
-                                .put("title", it.title)
-                                .put("body", it.body)
-                                .put("updatedAt", it.updatedAt)
-                                .put("color", it.color)
-                        )
-                    }
-                    val plain = arr.toString().toByteArray(Charsets.UTF_8)
-                    try {
-                        val encrypted = BackupCrypto.encrypt(plain, pw)
-                        resolver.openOutputStream(uri, "wt")?.use { it.write(encrypted) }
-                            ?: error("เขียนไฟล์สำรองไม่ได้")
-                    } finally {
-                        plain.fill(0)
-                    }
+                    val encrypted = buildBackupBytes(snapshot, pw)
+                    resolver.openOutputStream(uri, "wt")?.use { it.write(encrypted) }
+                        ?: error("เขียนไฟล์สำรองไม่ได้")
                 }
                 backupDialog = BackupDialog.None
                 val extra = if (skipped > 0) " (ข้าม $skipped รายการที่ถอดรหัสไม่ได้)" else ""
@@ -573,6 +626,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             out.write(buf, 0, n)
         }
         return out.toByteArray()
+    }
+
+    init {
+        // Remove shared backup copies left in the cache by earlier sessions.
+        viewModelScope.launch(Dispatchers.IO) {
+            val dir = File(app.cacheDir, "backups")
+            val cutoff = System.currentTimeMillis() - 60 * 60 * 1000L
+            dir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.delete() }
+        }
     }
 
     private companion object {

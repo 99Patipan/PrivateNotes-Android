@@ -1,7 +1,9 @@
 package th.privatenotes
 
+import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -77,6 +79,10 @@ private fun PrivateNotesApp(vm: NotesViewModel) {
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri -> vm.finishExport(uri, context.contentResolver) }
 
+    val shareLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { vm.onShareFinished() }
+
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> vm.onImportPicked(uri, context.contentResolver) }
@@ -142,7 +148,24 @@ private fun PrivateNotesApp(vm: NotesViewModel) {
                         unreadable = vm.unreadable,
                         onStart = { pw, pw2 ->
                             if (vm.beginExport(pw, pw2)) {
-                                exportLauncher.launch("private-notes-backup.snote")
+                                exportLauncher.launch(vm.backupFileName())
+                            }
+                        },
+                        onShare = { pw, pw2 ->
+                            vm.shareBackup(pw, pw2) { uri, name ->
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/octet-stream"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    putExtra(Intent.EXTRA_SUBJECT, name)
+                                    clipData = ClipData.newRawUri(name, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                try {
+                                    shareLauncher.launch(Intent.createChooser(send, "ส่งไฟล์สำรองไปยัง..."))
+                                } catch (e: Exception) {
+                                    vm.onShareFinished()
+                                    Toast.makeText(context, "เปิดหน้าแชร์ไม่ได้", Toast.LENGTH_LONG).show()
+                                }
                             }
                         },
                         onDismiss = vm::dismissBackupDialog

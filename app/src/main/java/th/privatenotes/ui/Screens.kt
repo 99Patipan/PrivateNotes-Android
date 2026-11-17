@@ -1,9 +1,20 @@
 package th.privatenotes.ui
 
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -79,6 +90,7 @@ fun LockScreen(
     var pin by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
     var stage by remember { mutableStateOf(0) } // setup only: 0 = choose PIN, 1 = confirm PIN
+    val view = LocalView.current
     val confirming = setup && stage == 1
     val current = if (confirming) confirm else pin
 
@@ -105,6 +117,10 @@ fun LockScreen(
     val shake = remember { Animatable(0f) }
     LaunchedEffect(message) {
         if (message.isNotEmpty()) {
+            view.performHapticFeedback(
+                if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT
+                else HapticFeedbackConstants.LONG_PRESS
+            )
             repeat(3) {
                 shake.animateTo(14f, tween(45))
                 shake.animateTo(-14f, tween(45))
@@ -156,15 +172,7 @@ fun LockScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 repeat(maxOf(6, current.length)) { i ->
-                    val filled = i < current.length
-                    val tint = if (isError) ErrorSoft else Gold
-                    Box(
-                        Modifier
-                            .size(14.dp)
-                            .clip(CircleShape)
-                            .background(if (filled) tint else Color.Transparent)
-                            .border(1.5.dp, if (filled) tint else Color.White.copy(alpha = 0.4f), CircleShape)
-                    )
+                    PinDot(filled = i < current.length, tint = if (isError) ErrorSoft else Gold)
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -278,13 +286,55 @@ private fun DigitKey(ch: Char, enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+private fun PinDot(filled: Boolean, tint: Color) {
+    // Filled dots "pop" in with a small bounce.
+    val scale by animateFloatAsState(
+        targetValue = if (filled) 1f else 0.75f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "dotScale"
+    )
+    val fill by animateColorAsState(if (filled) tint else Color.Transparent, tween(120), label = "dotFill")
+    val line by animateColorAsState(if (filled) tint else Color.White.copy(alpha = 0.4f), tween(120), label = "dotLine")
+    Box(
+        Modifier
+            .size(14.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(CircleShape)
+            .background(fill)
+            .border(1.5.dp, line, CircleShape)
+    )
+}
+
+/** Round key: shrinks and glows gold while pressed, with a short vibration on touch-down. */
+@Composable
 private fun KeyButton(enabled: Boolean, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+    val view = LocalView.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.88f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
+        label = "keyScale"
+    )
+    val bg by animateColorAsState(
+        targetValue = when {
+            !enabled -> Color.White.copy(alpha = 0.05f)
+            pressed -> Gold.copy(alpha = 0.35f)
+            else -> Color.White.copy(alpha = 0.10f)
+        },
+        animationSpec = tween(90),
+        label = "keyBg"
+    )
+    LaunchedEffect(pressed) {
+        if (pressed) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
     Box(
         Modifier
             .size(KeySize)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = if (enabled) 0.10f else 0.05f))
-            .clickable(enabled = enabled, onClick = onClick),
+            .background(bg)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
         content = content
     )

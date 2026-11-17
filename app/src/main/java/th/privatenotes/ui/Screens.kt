@@ -4,15 +4,20 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -300,36 +305,47 @@ private fun PinDot(filled: Boolean, tint: Color) {
     )
 }
 
-/** Round key: shrinks and glows gold while pressed, with a short vibration on touch-down. */
+/**
+ * Round key. Feedback is fired straight from the touch-down event (not from recomposed
+ * state), so even very quick taps vibrate and flash; the pressed look is held for a minimum
+ * of ~70 ms so it is always visible.
+ */
 @Composable
-private fun KeyButton(enabled: Boolean, onClick: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+private fun KeyButton(enabled: Boolean, action: () -> Unit, content: @Composable BoxScope.() -> Unit) {
     val view = LocalView.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-        label = "keyScale"
-    )
-    val bg by animateColorAsState(
-        targetValue = when {
-            !enabled -> Color.White.copy(alpha = 0.05f)
-            pressed -> Gold.copy(alpha = 0.35f)
-            else -> Color.White.copy(alpha = 0.10f)
-        },
-        animationSpec = tween(90),
-        label = "keyBg"
-    )
-    LaunchedEffect(pressed) {
-        if (pressed) Haptics.tap(view)
-    }
+    val scope = rememberCoroutineScope()
+    val progress = remember { Animatable(0f) } // 0 = idle, 1 = fully pressed
+    val seq = remember { intArrayOf(0) }
+    val currentAction by rememberUpdatedState(action)
+    val base = Color.White.copy(alpha = if (enabled) 0.10f else 0.05f)
+    val bg = lerp(base, Gold.copy(alpha = 0.35f), progress.value)
+    val scale = 1f - 0.12f * progress.value
+
     Box(
         Modifier
             .size(KeySize)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(bg)
-            .clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = enabled, onClick = onClick),
+            .semantics {
+                role = Role.Button
+                if (enabled) onClick { currentAction(); true }
+            }
+            .then(
+                if (enabled) Modifier.pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            val id = ++seq[0]
+                            Haptics.tap(view)
+                            scope.launch { progress.animateTo(1f, tween(40)) }
+                            tryAwaitRelease()
+                            delay(70)
+                            if (seq[0] == id) progress.animateTo(0f, tween(140))
+                        },
+                        onTap = { currentAction() }
+                    )
+                } else Modifier
+            ),
         contentAlignment = Alignment.Center,
         content = content
     )
